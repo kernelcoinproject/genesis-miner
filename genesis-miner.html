@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Genesis Block Miner</title>
+    <script src="scrypt.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.9.0/src/sha256.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: #444;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            margin-right: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .output-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .output-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+        }
+
+        .info-item {
+            margin-bottom: 12px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+
+        .info-label {
+            color: #667eea;
+            font-weight: 600;
+            display: inline-block;
+            min-width: 120px;
+        }
+
+        .status {
+            padding: 15px;
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            border-radius: 6px;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+
+        .status.success {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+
+        .status.mining {
+            background: #d1ecf1;
+            border-left-color: #17a2b8;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 15px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔨 Genesis Block Miner</h1>
+        <p class="subtitle">Browser-based cryptocurrency genesis block generator</p>
+
+        <div class="warning">
+            ⚠️ <strong>Note:</strong> Mining difficulty increases exponentially with target difficulty. Lower difficulty targets may take a very long time to find. Javascript is slow consider using <a href="https://github.com/kernelcoinproject/GenesisG0">GenesisG0</a> instead, which can do 10x faster scrypt and 50x faster sha256 on my m2 mac. 
+        </div>
+
+        <form id="minerForm">
+            <div class="form-group">
+                <label for="timestamp">Timestamp Message</label>
+                <input type="text" id="timestamp" value="The Times 03/Jan/2009 Chancellor on brink of second bailout for banks">
+            </div>
+
+            <div class="grid">
+                <div class="form-group">
+                    <label for="algorithm">Algorithm</label>
+                    <select id="algorithm">
+                        <option value="SHA256">SHA256</option>
+                        <option value="scrypt">scrypt</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="time">Unix Timestamp</label>
+                    <input type="number" id="time" value="">
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="form-group">
+                    <label for="nonce">Starting Nonce</label>
+                    <input type="number" id="nonce" value="0" min="0">
+                </div>
+
+                <div class="form-group">
+                    <label for="bits">Target Bits (Hex)</label>
+                    <input type="text" id="bits" value="">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="pubkey">Public Key (Hex)</label>
+                <input type="text" id="pubkey" value="04678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5f">
+            </div>
+
+            <div class="grid">
+                <div class="form-group">
+                    <label for="value">Output Value (satoshis)</label>
+                    <input type="number" id="value" value="5000000000" min="0">
+                </div>
+            </div>
+
+            <div>
+                <button type="submit" class="btn" id="startBtn">Start Mining</button>
+                <button type="button" class="btn btn-stop" id="stopBtn" disabled>Stop Mining</button>
+            </div>
+        </form>
+
+        <div id="status"></div>
+        <div id="output"></div>
+    </div>
+
+    <script>
+        // State management
+        let isMining = false;
+        let startTime = null;
+        let totalHashes = 0;
+        let scryptInstance = null;
+
+        // Initialize timestamp to current time and set default bits based on algorithm
+        document.getElementById('time').value = Math.floor(Date.now() / 1000);
+        document.getElementById('bits').value = '0x1d00ffff';
+
+        // Initialize scrypt library
+        if (typeof scrypt_module_factory !== 'undefined') {
+            scrypt_module_factory(function(scrypt) {
+                scryptInstance = scrypt;
+                console.log('✅ Scrypt library loaded successfully');
+                
+                // Test scrypt implementation
+                testScrypt();
+            });
+        } else {
+            console.error('❌ scrypt_module_factory not found. Make sure scrypt.js is loaded.');
+        }
+
+        function testScrypt() {
+            console.log('=== TESTING SCRYPT IMPLEMENTATION ===');
+            const testHeader = new Uint8Array([
+                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0xe2, 0x1b, 0x24, 0x1f,
+                0x67, 0x1b, 0x38, 0x83, 0x27, 0x44, 0x0b, 0xfd,
+                0x82, 0x94, 0x0a, 0x77, 0x12, 0xf1, 0x78, 0x2d,
+                0xa3, 0x85, 0xd9, 0xcf, 0xfb, 0x06, 0x54, 0x03,
+                0x70, 0xa5, 0xde, 0x0a, 0x8d, 0x1a, 0x14, 0x69,
+                0xf0, 0xff, 0x0f, 0x1e, 0x22, 0x4c, 0x0d, 0x00
+            ]);
+            
+            try {
+                const result = scryptHash(testHeader);
+                console.log('Scrypt test result:', bytesToHex(result));
+                console.log('Expected:          190b335b631a4a07bb53be01f042b382a6a59a3cd2e9c77132b4a6dd690d0000');
+                console.log('Match:', bytesToHex(result) === '190b335b631a4a07bb53be01f042b382a6a59a3cd2e9c77132b4a6dd690d0000');
+            } catch (e) {
+                console.error('Scrypt test failed:', e);
+            }
+        }
+
+        // Update bits when algorithm changes
+        document.getElementById('algorithm').addEventListener('change', (e) => {
+            const algorithm = e.target.value;
+            if (algorithm === 'scrypt') {
+                document.getElementById('bits').value = '0x1e0ffff0';
+            } else {
+                document.getElementById('bits').value = '0x1d00ffff';
+            }
+        });
+
+        // Utility functions
+        function hexToBytes(hex) {
+            hex = hex.replace(/^0x/, '');
+            const bytes = [];
+            for (let i = 0; i < hex.length; i += 2) {
+                bytes.push(parseInt(hex.substr(i, 2), 16));
+            }
+            return new Uint8Array(bytes);
+        }
+
+        function bytesToHex(bytes) {
+            return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function reverseBytes(bytes) {
+            return new Uint8Array(bytes).reverse();
+        }
+
+        function uint32ToBytes(num) {
+            const bytes = new Uint8Array(4);
+            bytes[0] = num & 0xff;
+            bytes[1] = (num >> 8) & 0xff;
+            bytes[2] = (num >> 16) & 0xff;
+            bytes[3] = (num >> 24) & 0xff;
+            return bytes;
+        }
+
+        function uint64ToBytes(num) {
+            const bytes = new Uint8Array(8);
+            const bigNum = BigInt(num);
+            for (let i = 0; i < 8; i++) {
+                bytes[i] = Number((bigNum >> BigInt(i * 8)) & BigInt(0xff));
+            }
+            return bytes;
+        }
+
+        function sha256Hash(data) {
+            // Use js-sha256 library for better performance (synchronous)
+            if (typeof sha256 !== 'undefined' && typeof sha256.array === 'function') {
+                return new Uint8Array(sha256.array(data));
+            }
+            // This shouldn't happen, but fallback just in case
+            throw new Error('SHA-256 library not loaded');
+        }
+
+        function doubleSHA256(data) {
+            const hash1 = sha256Hash(data);
+            const hash2 = sha256Hash(hash1);
+            return hash2;
+        }
+
+        function scryptHash(data) {
+            // Using tonyg/js-scrypt library via module factory
+            if (!scryptInstance) {
+                throw new Error('scrypt library not loaded. Make sure scrypt.js is in the same folder.');
+            }
+            
+            // The tonyg library expects the data as-is (not converted to array)
+            // crypto_scrypt(password, salt, N, r, p, dkLen)
+            const result = scryptInstance.crypto_scrypt(
+                data,  // password
+                data,  // salt (same as password for bitcoin mining)
+                1024,  // N
+                1,     // r
+                1,     // p
+                32     // dkLen
+            );
+            
+            return new Uint8Array(result);
+        }
+
+        function createInputScript(timestamp) {
+            const timestampBytes = new TextEncoder().encode(timestamp);
+            const len = timestampBytes.length;
+            
+            let scriptPrefix = [0x04, 0xff, 0xff, 0x00, 0x1d, 0x01, 0x04];
+            
+            if (len > 76) {
+                scriptPrefix.push(0x4c);
+            }
+            
+            scriptPrefix.push(len);
+            
+            const script = new Uint8Array(scriptPrefix.length + timestampBytes.length);
+            script.set(scriptPrefix);
+            script.set(timestampBytes, scriptPrefix.length);
+            
+            return script;
+        }
+
+        function createOutputScript(pubkey) {
+            const pubkeyBytes = hexToBytes(pubkey);
+            const script = new Uint8Array(2 + pubkeyBytes.length);
+            script[0] = pubkeyBytes.length;
+            script.set(pubkeyBytes, 1);
+            script[script.length - 1] = 0xac; // OP_CHECKSIG
+            return script;
+        }
+
+        function createTransaction(inputScript, outputScript, value) {
+            const parts = [];
+            
+            // Version
+            parts.push(uint32ToBytes(1));
+            
+            // Input count
+            parts.push(new Uint8Array([1]));
+            
+            // Previous output (null)
+            parts.push(new Uint8Array(32));
+            
+            // Previous output index
+            parts.push(uint32ToBytes(0xFFFFFFFF));
+            
+            // Script length
+            parts.push(new Uint8Array([inputScript.length]));
+            
+            // Input script
+            parts.push(inputScript);
+            
+            // Sequence
+            parts.push(uint32ToBytes(0xFFFFFFFF));
+            
+            // Output count
+            parts.push(new Uint8Array([1]));
+            
+            // Output value
+            parts.push(uint64ToBytes(value));
+            
+            // Output script length
+            parts.push(new Uint8Array([outputScript.length]));
+            
+            // Output script
+            parts.push(outputScript);
+            
+            // Lock time
+            parts.push(uint32ToBytes(0));
+            
+            // Combine all parts
+            const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+            const tx = new Uint8Array(totalLength);
+            let offset = 0;
+            for (const part of parts) {
+                tx.set(part, offset);
+                offset += part.length;
+            }
+            
+            return tx;
+        }
+
+        function createBlockHeader(merkleRoot, timestamp, bits, nonce) {
+            const header = new Uint8Array(80);
+            let offset = 0;
+            
+            // Version
+            header.set(uint32ToBytes(1), offset);
+            offset += 4;
+            
+            // Previous block hash (null)
+            offset += 32;
+            
+            // Merkle root
+            header.set(merkleRoot, offset);
+            offset += 32;
+            
+            // Timestamp
+            header.set(uint32ToBytes(timestamp), offset);
+            offset += 4;
+            
+            // Bits
+            header.set(uint32ToBytes(bits), offset);
+            offset += 4;
+            
+            // Nonce
+            header.set(uint32ToBytes(nonce), offset);
+            
+            return header;
+        }
+
+        function calculateTarget(bits) {
+            const mantissa = bits & 0xffffff;
+            const exponent = (bits >> 24) & 0xff;
+            
+            const target = new Uint8Array(32);
+            
+            if (exponent >= 1 && exponent <= 32) {
+                const pos = 32 - exponent;
+                
+                if (pos >= 0 && pos < 32) {
+                    target[pos] = (mantissa >> 16) & 0xff;
+                    if (pos + 1 < 32) {
+                        target[pos + 1] = (mantissa >> 8) & 0xff;
+                    }
+                    if (pos + 2 < 32) {
+                        target[pos + 2] = mantissa & 0xff;
+                    }
+                }
+            }
+            
+            return target;
+        }
+
+        function bytesLessThan(a, b) {
+            for (let i = 0; i < a.length; i++) {
+                if (a[i] < b[i]) return true;
+                if (a[i] > b[i]) return false;
+            }
+            return false;
+        }
+
+        function formatHashrate(hps) {
+            if (hps >= 1000000) {
+                return `${(hps / 1000000).toFixed(2)} MH/s`;
+            } else if (hps >= 1000) {
+                return `${(hps / 1000).toFixed(2)} KH/s`;
+            } else {
+                return `${hps.toFixed(2)} H/s`;
+            }
+        }
+
+        function formatTime(seconds) {
+            if (seconds < 60) {
+                return `${Math.floor(seconds)}s`;
+            } else if (seconds < 3600) {
+                const mins = Math.floor(seconds / 60);
+                const secs = Math.floor(seconds % 60);
+                return `${mins}m ${secs}s`;
+            } else if (seconds < 86400) {
+                const hours = Math.floor(seconds / 3600);
+                const mins = Math.floor((seconds % 3600) / 60);
+                return `${hours}h ${mins}m`;
+            } else {
+                const days = Math.floor(seconds / 86400);
+                const hours = Math.floor((seconds % 86400) / 3600);
+                return `${days}d ${hours}h`;
+            }
+        }
+
+        function updateStatus(message, type = 'mining') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = `
+                <div class="status ${type}">
+                    ${message}
+                    ${type === 'mining' ? '<div class="progress-bar"><div class="progress-fill"></div></div>' : ''}
+                </div>
+            `;
+        }
+
+        function displayOutput(data) {
+            const outputDiv = document.getElementById('output');
+            
+            // Calculate target info if bits provided
+            let targetInfo = '';
+            if (data.bits) {
+                const bitsNum = parseInt(data.bits, 16);
+                const target = calculateTarget(bitsNum);
+                const targetHex = bytesToHex(target);
+                
+                // Calculate expected hashes based on target difficulty
+                // The expected number of hashes is (2^256 / target)
+                let targetValue = 0n;
+                for (let i = 0; i < target.length; i++) {
+                    targetValue = (targetValue << 8n) | BigInt(target[i]);
+                }
+                
+                // Avoid division by zero
+                if (targetValue === 0n) {
+                    targetValue = 1n;
+                }
+                
+                // Calculate expected hashes: 2^256 / target
+                const maxValue = (1n << 256n);
+                const expectedHashes = Number(maxValue / targetValue);
+                
+                targetInfo = `
+                    <div class="info-item">
+                        <span class="info-label">Target:</span> ${targetHex}
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Expected Hashes:</span> ${expectedHashes.toLocaleString()}
+                    </div>
+                `;
+            }
+            
+            outputDiv.innerHTML = `
+                <div class="output-section">
+                    <h3>Block Information</h3>
+                    <div class="info-item">
+                        <span class="info-label">Algorithm:</span> ${data.algorithm}
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Merkle Root:</span> ${data.merkleRoot}
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Timestamp:</span> ${data.timestamp}
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Bits:</span> ${data.bits}
+                    </div>
+                    ${targetInfo}
+                    <div class="info-item">
+                        <span class="info-label">Public Key:</span> ${data.pubkey}
+                    </div>
+                    ${data.genesisHash ? `
+                        <div class="info-item" style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #667eea;">
+                            <span class="info-label">✅ Nonce:</span> ${data.nonce}
+                        </div>
+                        <div class="info-item">
+                            <span class="info-label">✅ Genesis Hash:</span> ${data.genesisHash}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        }
+
+        async function mineBlock(options) {
+            console.log('=== MINING PARAMETERS ===');
+            console.log('Timestamp:', options.timestamp);
+            console.log('Pubkey:', options.pubkey);
+            console.log('Time:', options.time);
+            console.log('Bits:', '0x' + options.bits.toString(16));
+            console.log('Value:', options.value);
+            console.log('Algorithm:', options.algorithm);
+            
+            // Create transaction
+            const inputScript = createInputScript(options.timestamp);
+            console.log('Input script:', bytesToHex(inputScript));
+            
+            const outputScript = createOutputScript(options.pubkey);
+            console.log('Output script:', bytesToHex(outputScript));
+            
+            const tx = createTransaction(inputScript, outputScript, options.value);
+            console.log('Transaction:', bytesToHex(tx));
+            
+            // Calculate merkle root
+            const merkleRoot = doubleSHA256(tx);
+            const merkleRootReversed = reverseBytes(merkleRoot);
+            console.log('Merkle root (reversed for display):', bytesToHex(merkleRootReversed));
+            console.log('Merkle root (in header):', bytesToHex(merkleRoot));
+            
+            // Display initial info
+            displayOutput({
+                algorithm: options.algorithm,
+                merkleRoot: bytesToHex(merkleRootReversed),
+                timestamp: options.timestamp,
+                bits: '0x' + options.bits.toString(16),
+                pubkey: options.pubkey
+            });
+            
+            // Create base block header
+            const baseHeader = createBlockHeader(
+                merkleRoot,
+                options.time,
+                options.bits,
+                options.nonce
+            );
+            
+            // Calculate target
+            const target = calculateTarget(options.bits);
+            
+            // Start mining
+            updateStatus('⛏️ Mining in progress...', 'mining');
+            
+            startTime = Date.now();
+            totalHashes = 0;
+            let nonce = options.nonce;
+            let lastUpdateTime = Date.now();
+            
+            while (isMining) {
+                // Create header with current nonce
+                const header = new Uint8Array(baseHeader);
+                header.set(uint32ToBytes(nonce), 76);
+                
+                // Debug logging for specific nonce
+                if (nonce === 871458) {
+                    console.log('=== NONCE 871458 DEBUG ===');
+                    console.log('Block header (hex):', bytesToHex(header));
+                    console.log('Block header length:', header.length);
+                }
+                
+                // Hash the header based on algorithm
+                const sha256Hash = doubleSHA256(header);
+                const sha256HashReversed = reverseBytes(new Uint8Array(sha256Hash));
+                
+                let headerHash;
+                if (options.algorithm === 'scrypt') {
+                    const scryptResult = scryptHash(header);
+                    if (nonce === 871458) {
+                        console.log('Scrypt result (before reverse):', bytesToHex(scryptResult));
+                    }
+                    headerHash = reverseBytes(scryptResult);
+                    if (nonce === 871458) {
+                        console.log('Scrypt result (after reverse):', bytesToHex(headerHash));
+                    }
+                } else {
+                    headerHash = sha256HashReversed;
+                }
+                
+                totalHashes++;
+                
+                // Debug logging for specific nonce
+                if (nonce === 871458) {
+                    console.log(`Nonce ${nonce}:`);
+                    console.log('  Header hash:', bytesToHex(headerHash));
+                    console.log('  Target:     ', bytesToHex(target));
+                    console.log('  Less than?  ', bytesLessThan(headerHash, target));
+                }
+                
+                // Update display every second
+                const now = Date.now();
+                if (now - lastUpdateTime >= 1000) {
+                    const elapsed = (now - startTime) / 1000;
+                    const hashrate = totalHashes / elapsed;
+                    
+                    // Calculate expected hashes based on target difficulty
+                    // The expected number of hashes is (2^256 / target)
+                    const target = calculateTarget(options.bits);
+                    
+                    // Convert target to a big number for calculation
+                    let targetValue = 0n;
+                    for (let i = 0; i < target.length; i++) {
+                        targetValue = (targetValue << 8n) | BigInt(target[i]);
+                    }
+                    
+                    // Avoid division by zero
+                    if (targetValue === 0n) {
+                        targetValue = 1n;
+                    }
+                    
+                    // Calculate expected hashes: 2^256 / target
+                    const maxValue = (1n << 256n);
+                    const expectedHashes = Number(maxValue / targetValue);
+                    
+                    const remainingHashes = Math.max(0, expectedHashes - totalHashes);
+                    const estimatedSecondsRemaining = hashrate > 0 ? remainingHashes / hashrate : Infinity;
+                    const progress = Math.min(100, (totalHashes / expectedHashes) * 100);
+                    
+                    updateStatus(
+                        `⛏️ Mining... ${formatHashrate(hashrate)} | ` +
+                        `Elapsed: ${formatTime(elapsed)} | ` +
+                        `Progress: ${progress.toFixed(2)}% | ` +
+                        `ETA: ${isFinite(estimatedSecondsRemaining) ? formatTime(estimatedSecondsRemaining) : 'calculating...'} | ` +
+                        `Nonce: ${nonce}`,
+                        'mining'
+                    );
+                    
+                    lastUpdateTime = now;
+                }
+                
+                // Check if hash meets target
+                if (bytesLessThan(headerHash, target)) {
+                    const elapsed = (Date.now() - startTime) / 1000;
+                    
+                    console.log('Found valid hash!');
+                    console.log('Nonce:', nonce);
+                    console.log('Header hash:', bytesToHex(headerHash));
+                    console.log('Target:', bytesToHex(target));
+                    console.log('SHA256 hash:', bytesToHex(sha256HashReversed));
+                    
+                    isMining = false; // Stop mining immediately
+                    
+                    displayOutput({
+                        algorithm: options.algorithm,
+                        merkleRoot: bytesToHex(merkleRootReversed),
+                        timestamp: options.timestamp,
+                        bits: '0x' + options.bits.toString(16),
+                        pubkey: options.pubkey,
+                        genesisHash: bytesToHex(sha256HashReversed),
+                        nonce: nonce
+                    });
+                    
+                    updateStatus(
+                        `🎉 Genesis block found! Nonce: ${nonce} | ` +
+                        `Time: ${formatTime(elapsed)}`,
+                        'success'
+                    );
+                    
+                    return;
+                }
+                
+                nonce++;
+                
+                // Yield to browser to keep UI responsive
+                // SHA256 is faster so we can do 100k hashes between yields
+                // Scrypt is slow so we yield every 1k hashes
+                const yieldFrequency = options.algorithm === 'scrypt' ? 1000 : 100000;
+                if (nonce % yieldFrequency === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+            }
+        }
+
+        // Event handlers
+        document.getElementById('minerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            if (isMining) return;
+            
+            // Get form values
+            const algorithm = document.getElementById('algorithm').value;
+            const timestamp = document.getElementById('timestamp').value;
+            const time = parseInt(document.getElementById('time').value);
+            const nonce = parseInt(document.getElementById('nonce').value);
+            const pubkey = document.getElementById('pubkey').value;
+            const value = parseInt(document.getElementById('value').value);
+            const bitsStr = document.getElementById('bits').value;
+            
+            // Parse bits
+            let bits;
+            if (bitsStr.startsWith('0x')) {
+                bits = parseInt(bitsStr, 16);
+            } else {
+                bits = parseInt(bitsStr);
+            }
+            
+            // Update UI
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            isMining = true;
+            
+            // Start mining
+            try {
+                await mineBlock({
+                    algorithm,
+                    timestamp,
+                    time,
+                    nonce,
+                    pubkey,
+                    value,
+                    bits
+                });
+            } catch (error) {
+                updateStatus(`❌ Error: ${error.message}`, 'error');
+                console.error(error);
+            }
+            
+            // Reset UI
+            isMining = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            isMining = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            updateStatus('⏸️ Mining stopped by user', 'warning');
+        });
+    </script>
+</body>
+</html>
