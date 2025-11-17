@@ -197,7 +197,7 @@
         <p class="subtitle">Browser-based cryptocurrency genesis block generator</p>
 
         <div class="warning">
-            ⚠️ <strong>Note:</strong> Mining difficulty increases exponentially with target difficulty. Lower difficulty targets may take a very long time to find. Javascript is slow consider using <a href="https://github.com/kernelcoinproject/GenesisG0">GenesisG0</a> instead, which can do 10x faster scrypt and 50x faster sha256 on my m2 mac. 
+            ⚠️ <strong>Note:</strong> Mining difficulty increases exponentially with target difficulty. Lower difficulty targets may take a very long time to find. Javascript is slow consider using <a href="https://github.com/kernelcoinproject/GenesisG0">GenesisG0</a> instead, which can do 6x faster scrypt and 45x faster sha256 on my m2 mac. 
         </div>
 
         <form id="minerForm">
@@ -715,12 +715,12 @@
                 totalHashes++;
                 
                 // Debug logging for specific nonce
-                if (nonce === 871458) {
-                    console.log(`Nonce ${nonce}:`);
-                    console.log('  Header hash:', bytesToHex(headerHash));
-                    console.log('  Target:     ', bytesToHex(target));
-                    console.log('  Less than?  ', bytesLessThan(headerHash, target));
-                }
+                //if (nonce === 871458) {
+                    //console.log(`Nonce ${nonce}:`);
+                    //console.log('  Header hash:', bytesToHex(headerHash));
+                    //console.log('  Target:     ', bytesToHex(target));
+                    //console.log('  Less than?  ', bytesLessThan(headerHash, target));
+                //}
                 
                 // Update display every second
                 const now = Date.now();
