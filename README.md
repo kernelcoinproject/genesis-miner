@@ -28,6 +28,10 @@ The RustCrypto `scrypt` crate is dual licensed under MIT or Apache-2.0; license 
 
 # Performance
 
-| Device  | SHA-256 Hashrate | Scrypt Hashrate |
-|---------|-------------------|------------------|
-| M2 Air | 349.97 kH/s        | 3.12 kH/s       |
+Measured on the M2 Air in the browser over localhost, using a target that would not be found during the sample. WebAssembly uses 8 workers. Rates are approximate and will vary by browser and system load.
+
+| Device | Engine | SHA-256 | Scrypt |
+|--------|--------|---------|--------|
+| M2 Air | JavaScript | 278.75 kH/s | 2.54 kH/s |
+| M2 Air | WebAssembly (8 workers) | 6.08 MH/s | 13.62 kH/s |
+| M2 Air | WebGPU | 43.24 MH/s | 50.08 kH/s |
