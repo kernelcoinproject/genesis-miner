@@ -6,6 +6,9 @@
     <title>Genesis Block Miner</title>
     <script src="scrypt.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.9.0/src/sha256.min.js"></script>
+    <script src="sha256_miner.js"></script>
+    <script src="sha256_webgpu.js"></script>
+    <script src="scrypt_webgpu.js"></script>
     <style>
         * {
             margin: 0;
@@ -197,7 +200,7 @@
         <p class="subtitle">Browser-based cryptocurrency genesis block generator</p>
 
         <div class="warning">
-            ⚠️ <strong>Note:</strong> Mining difficulty increases exponentially with target difficulty. Lower difficulty targets may take a very long time to find. Javascript is slow consider using <a href="https://github.com/kernelcoinproject/GenesisG0">GenesisG0</a> instead, which can do 6x faster scrypt and 45x faster sha256 on my m2 mac. 
+            ⚠️ <strong>Note:</strong> Mining difficulty increases exponentially with target difficulty. Lower difficulty targets may take a very long time to find. WebAssembly and WebGPU engines are available for SHA-256 and scrypt. For maximum performance, consider <a href="https://github.com/kernelcoinproject/GenesisG0">GenesisG0</a>.
         </div>
 
         <form id="minerForm">
@@ -219,6 +222,25 @@
                     <label for="time">Unix Timestamp</label>
                     <input type="number" id="time" value="">
                 </div>
+            </div>
+
+            <div class="form-group">
+                <label for="engine">Mining Engine</label>
+                <select id="engine">
+                    <option value="javascript">JavaScript</option>
+                    <option value="wasm">WebAssembly</option>
+                    <option value="webgpu">WebGPU</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="wasmWorkerGroup" hidden>
+                <label for="wasmWorkerCount">WebAssembly Workers</label>
+                <select id="wasmWorkerCount">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="4">4</option>
+                    <option value="8" selected>8</option>
+                </select>
             </div>
 
             <div class="grid">
@@ -312,7 +334,15 @@
             } else {
                 document.getElementById('bits').value = '0x1d00ffff';
             }
+            updateWasmWorkerControl();
         });
+
+        document.getElementById('engine').addEventListener('change', updateWasmWorkerControl);
+        function updateWasmWorkerControl() {
+            document.getElementById('wasmWorkerGroup').hidden =
+                document.getElementById('engine').value !== 'wasm';
+        }
+        updateWasmWorkerControl();
 
         // Utility functions
         function hexToBytes(hex) {
@@ -363,6 +393,51 @@
             const hash1 = sha256Hash(data);
             const hash2 = sha256Hash(hash1);
             return hash2;
+        }
+
+        let wasmMinerPromise;
+        function getWasmMiner() {
+            if (!wasmMinerPromise) {
+                if (typeof GenesisMinerModule !== 'function') {
+                    throw new Error('WebAssembly miner failed to load. Make sure sha256_miner.js is present next to index.html.');
+                }
+                wasmMinerPromise = GenesisMinerModule();
+            }
+            return wasmMinerPromise;
+        }
+
+        let nextWasmBatchId = 1;
+        function runWasmWorkerBatch(worker, header, target, startNonce, count, stride) {
+            const requestId = nextWasmBatchId++;
+            return new Promise((resolve, reject) => {
+                const onMessage = (event) => {
+                    if (event.data.requestId !== requestId) return;
+                    cleanup();
+                    if (event.data.error) {
+                        reject(new Error(event.data.error));
+                    } else {
+                        resolve(event.data);
+                    }
+                };
+                const onError = (event) => {
+                    cleanup();
+                    reject(new Error(event.message || 'WebAssembly worker failed to load.'));
+                };
+                const cleanup = () => {
+                    worker.removeEventListener('message', onMessage);
+                    worker.removeEventListener('error', onError);
+                };
+                worker.addEventListener('message', onMessage);
+                worker.addEventListener('error', onError);
+                worker.postMessage({
+                    requestId,
+                    header: Array.from(header),
+                    target: Array.from(target),
+                    startNonce: startNonce >>> 0,
+                    count,
+                    stride
+                });
+            });
         }
 
         function scryptHash(data) {
@@ -637,6 +712,7 @@
             console.log('Bits:', '0x' + options.bits.toString(16));
             console.log('Value:', options.value);
             console.log('Algorithm:', options.algorithm);
+            console.log('Mining engine:', options.engine);
             
             // Create transaction
             const inputScript = createInputScript(options.timestamp);
@@ -675,44 +751,238 @@
             const target = calculateTarget(options.bits);
             
             // Start mining
-            updateStatus('⛏️ Mining in progress...', 'mining');
+            const useShaWasm = options.engine === 'wasm' && options.algorithm === 'SHA256';
+            let useWebGpu = options.engine === 'webgpu' && options.algorithm === 'SHA256';
+            let useScryptWebGpu = options.engine === 'webgpu' && options.algorithm === 'scrypt';
+            let useScryptWasm = options.engine === 'wasm' && options.algorithm === 'scrypt';
+            let useWasm = useShaWasm || useScryptWasm;
+            const workerCount = parseInt(document.getElementById('wasmWorkerCount').value, 10);
+            let useShaWasmWorkers = false;
+            let shaWorkers = [];
+            let scryptWorkers = [];
+            let engineNotice = '';
+            let engineLabel = 'JavaScript';
+            let wasmMiner = null;
+            let webGpuMiner = null;
+            let wasmHeaderPtr = 0;
+            let wasmTargetPtr = 0;
+            let wasmResultPtr = 0;
+
+            if (useShaWasm) {
+                if (location.protocol === 'file:') {
+                    engineLabel = 'WebAssembly SHA-256 · main thread';
+                } else {
+                    try {
+                        shaWorkers = Array.from({ length: workerCount }, () =>
+                            new Worker(new URL('sha256_wasm_worker.js', document.baseURI))
+                        );
+                        useShaWasmWorkers = true;
+                        engineLabel = `WebAssembly SHA-256 · ${shaWorkers.length} workers`;
+                    } catch (error) {
+                        for (const worker of shaWorkers) worker.terminate();
+                        shaWorkers = [];
+                        engineLabel = 'WebAssembly SHA-256 · main thread fallback';
+                        engineNotice = 'WebAssembly Workers unavailable; using the main thread for SHA-256.';
+                        console.warn(engineNotice, error);
+                    }
+                }
+            }
+            if (useWebGpu) {
+                try {
+                    webGpuMiner = await createSha256WebGpuMiner();
+                    engineLabel = 'WebGPU SHA-256';
+                } catch (error) {
+                    useWebGpu = false;
+                    engineNotice = `WebGPU unavailable; using JavaScript SHA-256. ${error.message}`;
+                    engineLabel = 'JavaScript fallback';
+                    console.warn(engineNotice, error);
+                }
+            }
+            if (useScryptWebGpu) {
+                try {
+                    webGpuMiner = await createScryptWebGpuMiner();
+                    engineLabel = 'WebGPU scrypt';
+                } catch (error) {
+                    useScryptWebGpu = false;
+                    engineNotice = `WebGPU unavailable; using JavaScript scrypt. ${error.message}`;
+                    engineLabel = 'JavaScript fallback';
+                    console.warn(engineNotice, error);
+                }
+            }
+            if (useScryptWasm && location.protocol === 'file:') {
+                useScryptWasm = false;
+                useWasm = useShaWasm;
+                engineNotice = 'WebAssembly scrypt needs Workers; using JavaScript on this file page.';
+                engineLabel = 'JavaScript fallback · open over HTTP for WebAssembly';
+            } else if (useScryptWasm) {
+                try {
+                    scryptWorkers = Array.from({ length: workerCount }, () =>
+                        new Worker(new URL('scrypt_wasm_worker.js', document.baseURI))
+                    );
+                    engineLabel = `WebAssembly scrypt · ${scryptWorkers.length} workers`;
+                } catch (error) {
+                    for (const worker of scryptWorkers) worker.terminate();
+                    scryptWorkers = [];
+                    useScryptWasm = false;
+                    useWasm = useShaWasm;
+                    engineNotice = 'WebAssembly Workers unavailable; using JavaScript scrypt.';
+                    engineLabel = 'JavaScript fallback · Workers unavailable';
+                    console.warn(engineNotice, error);
+                }
+            }
+            updateStatus(engineNotice || '⛏️ Mining in progress...', engineNotice ? 'warning' : 'mining');
+            console.log('Effective mining engine:', engineLabel);
+            if (useShaWasm && !useShaWasmWorkers) {
+                wasmMiner = await getWasmMiner();
+                wasmHeaderPtr = wasmMiner._malloc(80);
+                wasmTargetPtr = wasmMiner._malloc(32);
+                wasmResultPtr = wasmMiner._malloc(36);
+                wasmMiner.HEAPU8.set(baseHeader, wasmHeaderPtr);
+                wasmMiner.HEAPU8.set(target, wasmTargetPtr);
+            }
             
             startTime = Date.now();
             totalHashes = 0;
             let nonce = options.nonce;
             let lastUpdateTime = Date.now();
-            
+            try {
             while (isMining) {
-                // Create header with current nonce
-                const header = new Uint8Array(baseHeader);
-                header.set(uint32ToBytes(nonce), 76);
+                let header;
+                let headerHash;
+                let sha256HashReversed;
+                let wasmFound = false;
+                if (useScryptWebGpu) {
+                    const batch = await webGpuMiner.mineBatch(baseHeader, target, nonce);
+                    totalHashes += batch.checked;
+                    if (batch.hash) {
+                        nonce = batch.nonce;
+                        headerHash = batch.hash;
+                        const foundHeader = new Uint8Array(baseHeader);
+                        foundHeader.set(uint32ToBytes(nonce), 76);
+                        const verifiedScryptHash = reverseBytes(scryptHash(foundHeader));
+                        if (bytesToHex(verifiedScryptHash) !== bytesToHex(headerHash)) {
+                            throw new Error(`WebGPU scrypt mismatch at nonce ${nonce}: GPU ${bytesToHex(headerHash)}, JavaScript ${bytesToHex(verifiedScryptHash)}.`);
+                        }
+                        // The PoW hash is scrypt, while a block's displayed genesis hash is SHA-256d.
+                        sha256HashReversed = reverseBytes(doubleSHA256(foundHeader));
+                        wasmFound = true;
+                    } else {
+                        nonce = (nonce + batch.checked) >>> 0;
+                    }
+                } else if (useWebGpu) {
+                    const batchSize = 65536;
+                    const batch = await webGpuMiner.mineBatch(baseHeader, target, nonce, batchSize);
+                    totalHashes += batch.checked;
+                    if (batch.hash) {
+                        nonce = batch.nonce;
+                        headerHash = batch.hash;
+                        sha256HashReversed = headerHash;
+                        wasmFound = true;
+                    } else {
+                        nonce = (nonce + batchSize) >>> 0;
+                    }
+                } else if (useShaWasmWorkers) {
+                    const batchSize = 25000;
+                    const batches = await Promise.all(shaWorkers.map((worker, index) =>
+                        runWasmWorkerBatch(
+                            worker,
+                            baseHeader,
+                            target,
+                            nonce + index,
+                            batchSize,
+                            shaWorkers.length
+                        )
+                    ));
+                    totalHashes += batches.reduce((sum, batch) => sum + batch.checked, 0);
+                    const foundBatch = batches
+                        .filter(batch => batch.hash)
+                        .sort((a, b) => ((a.nonce - nonce) >>> 0) - ((b.nonce - nonce) >>> 0))[0];
+                    if (foundBatch) {
+                        nonce = foundBatch.nonce;
+                        headerHash = new Uint8Array(foundBatch.hash);
+                        sha256HashReversed = headerHash;
+                        wasmFound = true;
+                    } else {
+                        nonce = (nonce + batchSize * shaWorkers.length) >>> 0;
+                    }
+                } else if (useShaWasm) {
+                    const batchSize = 25000;
+                    const checked = wasmMiner._mine_batch(
+                        wasmHeaderPtr,
+                        wasmTargetPtr,
+                        nonce >>> 0,
+                        batchSize,
+                        1,
+                        wasmResultPtr
+                    );
+                    if (checked > 0) {
+                        const resultView = new DataView(wasmMiner.HEAPU8.buffer, wasmResultPtr, 36);
+                        nonce = resultView.getUint32(0, true);
+                        headerHash = new Uint8Array(wasmMiner.HEAPU8.subarray(wasmResultPtr + 4, wasmResultPtr + 36));
+                        sha256HashReversed = headerHash;
+                        totalHashes += checked;
+                        wasmFound = true;
+                    } else {
+                        totalHashes += batchSize;
+                        nonce = (nonce + batchSize) >>> 0;
+                    }
+                } else if (useScryptWasm) {
+                    const batchSize = 32;
+                    const batches = await Promise.all(scryptWorkers.map((worker, index) =>
+                        runWasmWorkerBatch(
+                            worker,
+                            baseHeader,
+                            target,
+                            nonce + index,
+                            batchSize,
+                            scryptWorkers.length
+                        )
+                    ));
+                    totalHashes += batches.reduce((sum, batch) => sum + batch.checked, 0);
+                    const foundBatch = batches
+                        .filter(batch => batch.hash)
+                        .sort((a, b) => ((a.nonce - nonce) >>> 0) - ((b.nonce - nonce) >>> 0))[0];
+                    if (foundBatch) {
+                        nonce = foundBatch.nonce;
+                        headerHash = new Uint8Array(foundBatch.hash);
+                        const foundHeader = new Uint8Array(baseHeader);
+                        foundHeader.set(uint32ToBytes(nonce), 76);
+                        sha256HashReversed = reverseBytes(doubleSHA256(foundHeader));
+                        wasmFound = true;
+                    } else {
+                        nonce = (nonce + batchSize * scryptWorkers.length) >>> 0;
+                    }
+                } else {
+                    // Create header with current nonce
+                    header = new Uint8Array(baseHeader);
+                    header.set(uint32ToBytes(nonce), 76);
+                }
                 
                 // Debug logging for specific nonce
-                if (nonce === 871458) {
+                if (!useWasm && !useWebGpu && !useScryptWebGpu && nonce === 871458) {
                     console.log('=== NONCE 871458 DEBUG ===');
                     console.log('Block header (hex):', bytesToHex(header));
                     console.log('Block header length:', header.length);
                 }
                 
                 // Hash the header based on algorithm
-                const sha256Hash = doubleSHA256(header);
-                const sha256HashReversed = reverseBytes(new Uint8Array(sha256Hash));
-                
-                let headerHash;
-                if (options.algorithm === 'scrypt') {
-                    const scryptResult = scryptHash(header);
-                    if (nonce === 871458) {
-                        console.log('Scrypt result (before reverse):', bytesToHex(scryptResult));
+                if (!useWasm && !useWebGpu && !useScryptWebGpu) {
+                    const shaHash = doubleSHA256(header);
+                    sha256HashReversed = reverseBytes(new Uint8Array(shaHash));
+                    if (options.algorithm === 'scrypt') {
+                        const scryptResult = scryptHash(header);
+                        if (nonce === 871458) {
+                            console.log('Scrypt result (before reverse):', bytesToHex(scryptResult));
+                        }
+                        headerHash = reverseBytes(scryptResult);
+                        if (nonce === 871458) {
+                            console.log('Scrypt result (after reverse):', bytesToHex(headerHash));
+                        }
+                    } else {
+                        headerHash = sha256HashReversed;
                     }
-                    headerHash = reverseBytes(scryptResult);
-                    if (nonce === 871458) {
-                        console.log('Scrypt result (after reverse):', bytesToHex(headerHash));
-                    }
-                } else {
-                    headerHash = sha256HashReversed;
+                    totalHashes++;
                 }
-                
-                totalHashes++;
                 
                 // Debug logging for specific nonce
                 //if (nonce === 871458) {
@@ -752,7 +1022,7 @@
                     const progress = Math.min(100, (totalHashes / expectedHashes) * 100);
                     
                     updateStatus(
-                        `⛏️ Mining... ${formatHashrate(hashrate)} | ` +
+                        `⛏️ ${engineLabel} · ${formatHashrate(hashrate)} | ` +
                         `Elapsed: ${formatTime(elapsed)} | ` +
                         `Progress: ${progress.toFixed(2)}% | ` +
                         `ETA: ${isFinite(estimatedSecondsRemaining) ? formatTime(estimatedSecondsRemaining) : 'calculating...'} | ` +
@@ -764,7 +1034,7 @@
                 }
                 
                 // Check if hash meets target
-                if (bytesLessThan(headerHash, target)) {
+                if (wasmFound || (!useWasm && !useWebGpu && !useScryptWebGpu && bytesLessThan(headerHash, target))) {
                     const elapsed = (Date.now() - startTime) / 1000;
                     
                     console.log('Found valid hash!');
@@ -790,10 +1060,14 @@
                         `Time: ${formatTime(elapsed)}`,
                         'success'
                     );
-                    
+
                     return;
                 }
                 
+                if (useWasm || useWebGpu || useScryptWebGpu) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                    continue;
+                }
                 nonce++;
                 
                 // Yield to browser to keep UI responsive
@@ -803,6 +1077,16 @@
                 if (nonce % yieldFrequency === 0) {
                     await new Promise(resolve => setTimeout(resolve, 0));
                 }
+            }
+            } finally {
+                if (wasmMiner) {
+                    wasmMiner._free(wasmHeaderPtr);
+                    wasmMiner._free(wasmTargetPtr);
+                    wasmMiner._free(wasmResultPtr);
+                }
+                for (const worker of shaWorkers) worker.terminate();
+                for (const worker of scryptWorkers) worker.terminate();
+                if (webGpuMiner) webGpuMiner.close();
             }
         }
 
@@ -814,6 +1098,7 @@
             
             // Get form values
             const algorithm = document.getElementById('algorithm').value;
+            const engine = document.getElementById('engine').value;
             const timestamp = document.getElementById('timestamp').value;
             const time = parseInt(document.getElementById('time').value);
             const nonce = parseInt(document.getElementById('nonce').value);
@@ -838,6 +1123,7 @@
             try {
                 await mineBlock({
                     algorithm,
+                    engine,
                     timestamp,
                     time,
                     nonce,
